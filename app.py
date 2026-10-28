@@ -1,3 +1,4 @@
+import html
 import pandas as pd
 import plotly.express as px
 import secrets
@@ -13,6 +14,7 @@ from payguard.checkout_service import (
 from payguard.demo_data import make_demo_transactions
 from payguard.investigation_service import InvestigationStore
 from payguard.paypal_client import PayPalClient
+from payguard.presentation import format_currency_amount
 from payguard.risk_engine import assess_transactions
 
 st.set_page_config(page_title="PayGuard AI", page_icon="◈", layout="wide", initial_sidebar_state="expanded")
@@ -20,8 +22,11 @@ st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
 :root{--ink:#e9eff8;--muted:#94a3b8;--panel:#121d2b;--line:#253447;--blue:#5b9cff;--teal:#51d6bd}
 html,body,[class*="css"]{font-family:'DM Sans',sans-serif} .stApp{background:#0b1320;color:var(--ink)}
-.block-container{max-width:1420px;padding-top:1.5rem}.hero{padding:24px 0 12px}.eyebrow{color:#6fa9ff;text-transform:uppercase;letter-spacing:.15em;font-size:11px;font-weight:700}.hero h1{font-family:Manrope,sans-serif;font-size:34px;margin:3px 0;color:#f4f7fb}.hero p{color:#9baec4}.metric-card{background:#121d2b;border:1px solid #253447;border-radius:12px;padding:18px 20px;height:108px}.metric-label{color:#93a5bb;font-size:12px}.metric-value{font-family:Manrope,sans-serif;color:#f4f7fb;font-size:26px;font-weight:700;margin-top:7px}.metric-note{color:#51d6bd;font-size:11px;margin-top:2px}.section{font-family:Manrope,sans-serif;font-weight:700;color:#edf3fb;font-size:18px;margin:18px 0 8px}.tag{border-radius:20px;padding:4px 10px;background:#17283b;color:#a9cfff;font-size:12px}.stTabs [data-baseweb="tab-list"]{gap:8px}.stTabs [data-baseweb="tab"]{background:#121d2b;border-radius:8px 8px 0 0}
-div[data-testid="stDataFrame"]{border:1px solid #253447;border-radius:10px} .stButton button[kind="primary"]{background:#316ee8;border:0}
+.block-container{max-width:1420px;padding-top:1.5rem}.hero{padding:24px 0 12px}.eyebrow{color:#6fa9ff;text-transform:uppercase;letter-spacing:.15em;font-size:11px;font-weight:700}.hero h1{font-family:Manrope,sans-serif;font-size:34px;margin:3px 0;color:#f4f7fb}.hero p{color:#9baec4}
+.kpi-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:16px 0 38px}.metric-card{box-sizing:border-box;min-width:0;min-height:148px;padding:18px 20px;background:#121d2b;border:1px solid #253447;border-radius:12px;display:flex;flex-direction:column;justify-content:space-between}.metric-label{min-height:2.7em;color:#93a5bb;font-size:12px;line-height:1.35;letter-spacing:.045em;overflow-wrap:anywhere}.metric-value{max-width:100%;font-family:Manrope,sans-serif;color:#f4f7fb;font-size:clamp(1.2rem,1.8vw,1.8rem);line-height:1.18;font-weight:700;letter-spacing:-.035em;margin:2px 0 7px;white-space:nowrap;font-variant-numeric:tabular-nums}.metric-note{min-height:1.3em;max-width:100%;color:#51d6bd;font-size:11px;line-height:1.4;margin-top:auto;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.section{font-family:Manrope,sans-serif;font-weight:700;color:#edf3fb;font-size:18px;margin:18px 0 8px}.tag{border-radius:20px;padding:4px 10px;background:#17283b;color:#a9cfff;font-size:12px}.stTabs [data-baseweb="tab-list"]{gap:8px}.stTabs [data-baseweb="tab"]{background:#121d2b;border-radius:8px 8px 0 0}
+div[data-testid="stDataFrame"]{border:1px solid #253447;border-radius:10px}div[data-testid="stPlotlyChart"]{min-width:0;max-width:100%}.stButton button[kind="primary"]{background:#316ee8;border:0}
+@media(max-width:1000px){.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.metric-value{font-size:clamp(1.2rem,3vw,1.7rem)}}
+@media(max-width:620px){.kpi-grid{grid-template-columns:minmax(0,1fr);gap:10px;margin-bottom:30px}.metric-card{min-height:132px;padding:16px 18px}.metric-value{font-size:1.65rem}.hero h1{font-size:29px}}
 </style>""", unsafe_allow_html=True)
 
 @st.cache_data(ttl=90)
@@ -68,11 +73,8 @@ with st.sidebar:
     st.caption("Scores prioritize review. They are not fraud probabilities or automatic decisions.")
 
 st.markdown(f'<div class="hero"><div class="eyebrow">PAYMENT INTELLIGENCE / {source.upper()}</div><h1>Merchant overview</h1><p>Make unusual payment activity easier to investigate, with evidence you can inspect.</p></div>', unsafe_allow_html=True)
-def metric(label, value, note=""):
-    st.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div><div class="metric-note">{note}</div></div>', unsafe_allow_html=True)
-
 def currency_breakdown(values):
-    return " · ".join(f"{code} {amount:,.2f}" for code, amount in values.items()) or "No amounts"
+    return " · ".join(format_currency_amount(code, amount) for code, amount in values.items()) or "No amounts"
 
 if not metrics["volume_by_currency"]:
     volume_display, volume_note = "Unavailable", "No transaction amounts loaded"
@@ -80,15 +82,30 @@ elif metrics["volume"] is None:
     volume_display, volume_note = "Multi-currency", currency_breakdown(metrics["volume_by_currency"])
 else:
     only_currency = next(iter(metrics["volume_by_currency"]))
-    volume_display, volume_note = f"{only_currency} {metrics['volume']:,.2f}", "Loaded dataset total"
+    volume_display, volume_note = format_currency_amount(only_currency, metrics["volume"]), "Loaded dataset total"
 
-cols = st.columns(6)
-with cols[0]: metric("TRANSACTIONS", f"{metrics['count']:,}", source)
-with cols[1]: metric("PAYMENT VOLUME", volume_display, volume_note)
-with cols[2]: metric("SUCCESSFUL", f"{metrics['success_count']:,}", currency_breakdown(metrics["success_amount_by_currency"]))
-with cols[3]: metric("FAILED", f"{metrics['failed_count']:,}", "Payment status")
-with cols[4]: metric("REFUNDED", f"{metrics['refund_count']:,}" if metrics["refund_available"] else "Unavailable", currency_breakdown(metrics["refund_amount_by_currency"]) if metrics["refund_available"] else "Not provided by source")
-with cols[5]: metric("OPEN REVIEWS", f"{open_count:,}", f"{high_count} high-priority findings")
+kpi_cards = [
+    ("TRANSACTIONS", f"{metrics['count']:,}", source),
+    ("PAYMENT VOLUME", volume_display, volume_note),
+    ("SUCCESSFUL", f"{metrics['success_count']:,}", currency_breakdown(metrics["success_amount_by_currency"])),
+    ("FAILED", f"{metrics['failed_count']:,}", "Payment status"),
+    ("REFUNDED", f"{metrics['refund_count']:,}" if metrics["refund_available"] else "Unavailable", currency_breakdown(metrics["refund_amount_by_currency"]) if metrics["refund_available"] else "Not provided by source"),
+    ("OPEN REVIEWS", f"{open_count:,}", f"{high_count} high-priority findings"),
+]
+kpi_html = ['<section class="kpi-grid" aria-label="Dashboard metrics">']
+for label, value, note in kpi_cards:
+    safe_label = html.escape(str(label))
+    safe_value = html.escape(str(value))
+    safe_note = html.escape(str(note))
+    accessible_text = html.escape(f"{label}: {value}. {note}", quote=True)
+    kpi_html.append(
+        f'<article class="metric-card" aria-label="{accessible_text}" title="{accessible_text}">'
+        f'<div class="metric-label">{safe_label}</div>'
+        f'<div class="metric-value" title="{html.escape(str(value), quote=True)}">{safe_value}</div>'
+        f'<div class="metric-note" title="{html.escape(str(note), quote=True)}">{safe_note}</div></article>'
+    )
+kpi_html.append('</section>')
+st.markdown("".join(kpi_html), unsafe_allow_html=True)
 
 if transactions.empty:
     st.info("No transaction data is available for the selected source. Configure PayPal Sandbox or switch PAYGUARD_DATA_SOURCE to demo.")
@@ -99,10 +116,15 @@ else:
         chart_data = transactions.copy(); chart_data["timestamp"] = pd.to_datetime(chart_data.timestamp, utc=True, errors="coerce")
         chart_data["amount"] = pd.to_numeric(chart_data.amount, errors="coerce")
         chart_data = chart_data.dropna(subset=["timestamp", "amount"]).set_index("timestamp").groupby("currency").resample("D").amount.sum().reset_index()
-        st.plotly_chart(px.area(chart_data, x="timestamp", y="amount", color="currency", template="plotly_dark", color_discrete_sequence=["#5b9cff", "#51d6bd", "#e8b768", "#ff7585"], labels={"timestamp":"Date", "amount":"Volume (native currency)"}).update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=0,r=0,t=8,b=0),height=290), width="stretch")
+        activity_fig = px.area(chart_data, x="timestamp", y="amount", color="currency", template="plotly_dark", color_discrete_sequence=["#5b9cff", "#51d6bd", "#e8b768", "#ff7585"], labels={"timestamp":"Date", "amount":"Volume (native currency)"})
+        activity_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=62,r=18,t=54,b=46), height=340, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+        st.plotly_chart(activity_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
     with right:
         st.markdown('<div class="section">Payment status</div>', unsafe_allow_html=True)
-        st.plotly_chart(px.pie(transactions, names="status", hole=.68, template="plotly_dark", color_discrete_sequence=["#51d6bd", "#ff7585", "#e8b768", "#6e8cae"]).update_layout(paper_bgcolor="rgba(0,0,0,0)",margin=dict(l=0,r=0,t=8,b=0),height=290,showlegend=True), width="stretch")
+        status_fig = px.pie(transactions, names="status", hole=.68, template="plotly_dark", color_discrete_sequence=["#51d6bd", "#ff7585", "#e8b768", "#6e8cae"])
+        status_fig.update_traces(textposition="inside", textinfo="percent", textfont_size=11, automargin=True)
+        status_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=12,r=12,t=20,b=76), height=340, showlegend=True, uniformtext_minsize=10, uniformtext_mode="hide", legend=dict(orientation="h", yanchor="top", y=-.14, xanchor="center", x=.5, font=dict(size=10)))
+        st.plotly_chart(status_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
 
 tab_overview, tab_transactions, tab_investigate, tab_analytics, tab_settings = st.tabs(["Overview", "Transactions", "Investigations", "Analytics", "Settings"])
 with tab_overview:
@@ -116,7 +138,10 @@ with tab_overview:
     with b:
         st.markdown('<div class="section">Risk priority</div>', unsafe_allow_html=True)
         if risk.empty: st.caption("Risk findings will appear when a rule has evidence to report.")
-        else: st.plotly_chart(px.histogram(risk, x="severity", color="severity", category_orders={"severity":["High","Medium","Low"]}, template="plotly_dark", color_discrete_map={"High":"#ff7585","Medium":"#e8b768","Low":"#51d6bd"}).update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",showlegend=False,margin=dict(l=0,r=0,t=8,b=0)),width="stretch")
+        else:
+            priority_fig = px.histogram(risk, x="severity", color="severity", category_orders={"severity":["High","Medium","Low"]}, template="plotly_dark", color_discrete_map={"High":"#ff7585","Medium":"#e8b768","Low":"#51d6bd"})
+            priority_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", autosize=True, showlegend=False, margin=dict(l=34,r=18,t=20,b=38), height=320)
+            st.plotly_chart(priority_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
 
 with tab_transactions:
     st.markdown('<div class="section">Transaction explorer</div>', unsafe_allow_html=True)
@@ -193,10 +218,18 @@ with tab_analytics:
         period = st.selectbox("Period", ["All available data", "Last 7 days", "Last 30 days"])
         if period != "All available data": analytic = analytic[analytic.timestamp >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=7 if period == "Last 7 days" else 30)]
         c1, c2 = st.columns(2)
-        with c1: st.plotly_chart(px.histogram(analytic, x="amount", color="currency", facet_col="currency", nbins=24, template="plotly_dark", title="Transaction amount distribution by currency").update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)"), width="stretch")
+        with c1:
+            amount_fig = px.histogram(analytic, x="amount", color="currency", facet_col="currency", nbins=24, template="plotly_dark", title="Transaction amount distribution by currency")
+            amount_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=52,r=18,t=76,b=58), height=400)
+            amount_fig.update_xaxes(tickangle=-25)
+            st.plotly_chart(amount_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
         with c2:
             rule_rows = [{"rule": rule, "findings": int(risk.rules.map(lambda rules: rule in rules).sum())} for rule in sorted({r for rules in risk.rules for r in rules})] if not risk.empty else []
-            if rule_rows: st.plotly_chart(px.bar(pd.DataFrame(rule_rows), x="rule", y="findings", template="plotly_dark", title="Findings by rule", color_discrete_sequence=["#51d6bd"]).update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)"), width="stretch")
+            if rule_rows:
+                rules_fig = px.bar(pd.DataFrame(rule_rows), x="rule", y="findings", template="plotly_dark", title="Findings by rule", color_discrete_sequence=["#51d6bd"])
+                rules_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=42,r=18,t=76,b=92), height=400)
+                rules_fig.update_xaxes(tickangle=-25, automargin=True)
+                st.plotly_chart(rules_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
             else: st.info("No rule findings in this dataset.")
         status = analytic.status.astype(str).str.upper()
         st.metric("Payment success rate", f"{(status.isin(['COMPLETED','SUCCESS','S']).mean()*100):.1f}%" if len(analytic) else "Unavailable")
