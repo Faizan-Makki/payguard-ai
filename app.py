@@ -342,3 +342,4 @@ if active_section == "Settings":
     st.write("**Storage:** Local SQLite file; suitable for a demo, not shared multi-user production storage.")
     st.markdown("Set environment variables before starting Streamlit or in Render settings. Streamlit does not load `.env` automatically. Never paste credentials into this page.")
     st.code("PAYGUARD_DATA_SOURCE=demo  # or paypal\nPAYPAL_CLIENT_ID=...\nPAYPAL_CLIENT_SECRET=...\nPAYPAL_BASE_URL=https://api-m.sandbox.paypal.com\nOPENAI_API_KEY=...\nOPENAI_MODEL=gpt-4o-mini\nOPENAI_BASE_URL=https://api.openai.com/v1", language="bash")
+    
