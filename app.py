@@ -1,9 +1,15 @@
 import pandas as pd
 import plotly.express as px
+import secrets
 import streamlit as st
 from payguard.ai_service import explain_finding
 from payguard.analytics import summarize
 from payguard.config import settings
+from payguard.checkout_service import (
+    CheckoutError, PayPalCheckoutStore, SANDBOX_TEST_AMOUNT,
+    assess_sandbox_capture, create_sandbox_order, process_cancellation,
+    verify_and_capture,
+)
 from payguard.demo_data import make_demo_transactions
 from payguard.investigation_service import InvestigationStore
 from payguard.paypal_client import PayPalClient
@@ -164,10 +170,10 @@ with tab_investigate:
                 result = st.session_state.ai_explanations.get(explanation_key)
                 if result is None:
                     result = explain_finding(finding.to_dict())
-                if settings.openai_api_key and st.button("Ask AI to explain this finding", key=f"ai-{explanation_key}"):
-                    result = explain_finding(finding.to_dict(), settings.openai_api_key, settings.openai_model, base_url=settings.openai_base_url)
+                if settings.GEMINI_API_KEY and st.button("Ask AI to explain this finding", key=f"ai-{explanation_key}"):
+                    result = explain_finding(finding.to_dict(), settings.GEMINI_API_KEY, settings.GEMINI_MODEL)
                     st.session_state.ai_explanations[explanation_key] = result
-                elif not settings.openai_api_key:
+                elif not settings.GEMINI_API_KEY:
                     st.caption("AI provider not configured. Showing the deterministic rules-based explanation.")
                 st.caption(f"Explanation source: {result['provider']}")
                 st.write(result["why_flagged"])
@@ -221,7 +227,79 @@ with tab_settings:
             st.error(f"Connection test failed ({probe.get('error', 'unknown error')}). No transaction rows were invented.")
     elif settings.data_source == "paypal":
         st.info("Select PayPal Sandbox and set server-side credentials before testing the reporting API.")
-    st.write(f"**AI provider key:** {'Configured; a request is made only when you click the explanation button' if settings.openai_api_key else 'Not configured; deterministic fallback is active'} — key remains server-side.")
+    st.write(f"**Gemini API key:** {'Configured; a request is made only when you click the explanation button' if settings.GEMINI_API_KEY else 'Not configured; deterministic fallback is active'} — key remains server-side.")
     st.write("**Storage:** Local SQLite file; suitable for a demo, not shared multi-user production storage.")
-    st.markdown("Set environment variables before starting Streamlit or in Render settings. Streamlit does not load `.env` automatically. Never paste credentials into this page.")
-    st.code("PAYGUARD_DATA_SOURCE=demo  # or paypal\nPAYPAL_CLIENT_ID=...\nPAYPAL_CLIENT_SECRET=...\nPAYPAL_BASE_URL=https://api-m.sandbox.paypal.com\nOPENAI_API_KEY=...\nOPENAI_MODEL=gpt-4o-mini\nOPENAI_BASE_URL=https://api.openai.com/v1", language="bash")
+    st.markdown("Set environment variables before starting Streamlit or in Render settings. The project loads its own `.env` file at startup. Never paste credentials into this page.")
+    st.code("PAYGUARD_DATA_SOURCE=demo\nPAYPAL_CLIENT_ID=...\nPAYPAL_CLIENT_SECRET=...\nPAYPAL_BASE_URL=https://api-m.sandbox.paypal.com\nPAYPAL_RETURN_URL=http://localhost:8501/\nPAYPAL_CANCEL_URL=http://localhost:8501/\nGEMINI_API_KEY=...\nGEMINI_MODEL=gemini-3.8-flash", language="bash")
+
+    st.markdown('<div class="section">PayPal Sandbox checkout test</div>', unsafe_allow_html=True)
+    st.caption("Creates a fixed USD test order through the Sandbox API. Use a Sandbox Personal buyer. Approval alone does not mark the payment complete; PayGuard verifies and captures server-side after you request verification.")
+    if not settings.paypal_configured:
+        st.info("Configure Sandbox REST credentials in the server environment to use checkout. Demo mode remains available without them.")
+    else:
+        checkout_store = PayPalCheckoutStore(settings.db_path)
+        checkout_client = PayPalClient(settings.paypal_client_id, settings.paypal_client_secret, settings.paypal_base_url)
+        st.info(f"Fixed test amount: USD {SANDBOX_TEST_AMOUNT} · Source: PayPal Sandbox · Stored locally in SQLite")
+        if "pg_checkout_state" not in st.session_state:
+            st.session_state.pg_checkout_state = None
+        query = st.query_params
+        callback_event = query.get("pg_checkout")
+        callback_state = query.get("pg_state")
+        callback_order = query.get("token")
+        if callback_event in {"return", "cancel"} and callback_state and callback_order:
+            try:
+                if callback_event == "cancel":
+                    cancelled = process_cancellation(checkout_client, checkout_store, callback_order, callback_state)
+                    st.session_state.pg_checkout_state = callback_state
+                    if cancelled["status"] == "PAID":
+                        st.success("PayPal confirms this Sandbox order was already completed. The verified capture is recorded below.")
+                    else:
+                        st.info("PayPal returned you from the approval flow. This order has not been captured.")
+                else:
+                    returned_attempt = checkout_store.get_attempt(callback_state)
+                    if not returned_attempt or returned_attempt.get("order_id") != callback_order:
+                        raise CheckoutError("PayPal return did not match the order stored for this checkout")
+                    st.session_state.pg_checkout_state = callback_state
+                    st.info("Return received. PayGuard will verify this order with PayPal before offering server-side capture.")
+            except Exception as exc:
+                st.error(f"Could not validate the PayPal return ({type(exc).__name__}). Start a new Sandbox checkout if needed.")
+            finally:
+                # Remove callback parameters so refreshes do not repeat callback handling.
+                st.query_params.clear()
+        if st.button("Create USD 1.00 Sandbox checkout", type="primary", key="pg-create-checkout"):
+            state = secrets.token_urlsafe(32)
+            try:
+                checkout_store.create_attempt(state)
+                attempt = create_sandbox_order(checkout_client, checkout_store, state, settings.paypal_return_url, settings.paypal_cancel_url)
+                st.session_state.pg_checkout_state = state
+                st.success("Sandbox order created. Open the approval link and complete the buyer step using your Sandbox Personal account.")
+            except Exception as exc:
+                st.error(f"Sandbox order creation failed ({type(exc).__name__}). No synthetic data was substituted.")
+        checkout_state = st.session_state.get("pg_checkout_state")
+        attempt = checkout_store.get_attempt(checkout_state) if checkout_state else None
+        if attempt:
+            st.caption(f"Checkout state: {attempt['status']} · Order ID: {attempt['order_id'] or 'not created'}")
+            if attempt.get("approval_url") and attempt["status"] == "AWAITING_APPROVAL":
+                st.link_button("Open PayPal Sandbox approval", attempt["approval_url"])
+                st.caption("Sign in with your Sandbox Personal buyer, approve the USD 1.00 payment, then return to this app.")
+                if st.button("Verify with PayPal and capture", key="pg-verify-capture"):
+                    try:
+                        attempt = verify_and_capture(checkout_client, checkout_store, attempt["order_id"], checkout_state)
+                        if attempt["status"] == "PAID":
+                            st.success("PayPal confirmed a completed Sandbox capture.")
+                        else:
+                            st.warning("PayPal has not confirmed buyer approval yet. Complete approval, then verify again.")
+                    except Exception as exc:
+                        st.error(f"Verification/capture did not complete ({type(exc).__name__}). The app has not marked this payment paid.")
+            if attempt["status"] == "PAID" and attempt.get("transaction"):
+                txn = attempt["transaction"]
+                st.write({"Source": txn["source"], "Capture ID": txn["transaction_id"], "Amount": f"{txn['currency']} {txn['amount']:.2f}", "PayPal status": txn["status"], "Timestamp": txn["timestamp"] or "Not supplied"})
+                st.caption("This verified Sandbox capture is assessed on its own and is not added to synthetic demo metrics or transactions.")
+                sandbox_risk = assess_sandbox_capture(txn)
+                if sandbox_risk.empty:
+                    st.info("No risk rule was triggered by this single capture. A single payment is not evidence of fraud.")
+                else:
+                    finding = sandbox_risk.iloc[0]
+                    st.write(f"Investigation priority: {finding.severity} · {finding.score}/100")
+                    st.write("Evidence:", finding.evidence)
+                    st.write(finding.explanation)

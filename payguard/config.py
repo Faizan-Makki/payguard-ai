@@ -23,9 +23,10 @@ class Settings:
     paypal_client_id: str = os.getenv("PAYPAL_CLIENT_ID", "").strip()
     paypal_client_secret: str = os.getenv("PAYPAL_CLIENT_SECRET", "").strip()
     paypal_base_url: str = os.getenv("PAYPAL_BASE_URL", "https://api-m.sandbox.paypal.com").strip().rstrip("/")
-    openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
-    openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip().rstrip("/")
+    paypal_return_url: str = os.getenv("PAYPAL_RETURN_URL", "http://localhost:8501/").strip()
+    paypal_cancel_url: str = os.getenv("PAYPAL_CANCEL_URL", "http://localhost:8501/").strip()
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
     db_path: str = os.getenv("PAYGUARD_DB_PATH", "payguard.db")
 
     @property

@@ -122,3 +122,31 @@ def test_request_error_is_sanitized():
         with pytest.raises(PayPalAPIError, match="timed out") as error:
             client.fetch_transactions()
     assert "super-secret" not in str(error.value)
+
+
+def test_orders_create_and_capture_use_sandbox_api_and_idempotency_headers():
+    client = PayPalClient("id", "secret")
+    created = {"id":"ORDER123", "status":"CREATED", "links":[{"rel":"payer-action", "href":"https://www.sandbox.paypal.com/checkoutnow?token=ORDER123"}]}
+    with patch("payguard.paypal_client.requests.post", side_effect=[response({"access_token":"safe-test-token"}), response(created), response({"access_token":"safe-test-token"}), response({"id":"ORDER123", "status":"COMPLETED"})]) as post:
+        result = client.create_order("1.00", "USD", "http://localhost:8501/?pg_state=state", "http://localhost:8501/?pg_state=state", "create-key")
+        captured = client.capture_order("ORDER123", "capture-key")
+    assert result["approval_url"] == created["links"][0]["href"]
+    assert captured["status"] == "COMPLETED"
+    assert post.call_args_list[1].args[0] == "https://api-m.sandbox.paypal.com/v2/checkout/orders"
+    create_call = post.call_args_list[1].kwargs
+    assert create_call["json"]["intent"] == "CAPTURE"
+    assert create_call["json"]["purchase_units"][0]["amount"] == {"currency_code":"USD", "value":"1.00"}
+    assert create_call["headers"]["PayPal-Request-Id"] == "create-key"
+    assert post.call_args_list[3].args[0].endswith("/v2/checkout/orders/ORDER123/capture")
+    assert post.call_args_list[3].kwargs["headers"]["PayPal-Request-Id"] == "capture-key"
+    assert post.call_args_list[3].kwargs["json"] == {}
+
+
+def test_orders_client_rejects_live_approval_link_and_unsafe_redirect():
+    client = PayPalClient("id", "secret")
+    bad_response = {"id":"ORDER123", "status":"CREATED", "links":[{"rel":"approve", "href":"https://www.paypal.com/checkoutnow"}]}
+    with patch("payguard.paypal_client.requests.post", side_effect=[response({"access_token":"test-token"}), response(bad_response)]):
+        with pytest.raises(PayPalAPIError, match="Sandbox approval link"):
+            client.create_order("1.00", "USD", "http://localhost:8501/", "http://localhost:8501/", "request-key")
+    with pytest.raises(ValueError, match="HTTPS"):
+        client.create_order("1.00", "USD", "http://example.com/return", "http://localhost:8501/", "request-key")
