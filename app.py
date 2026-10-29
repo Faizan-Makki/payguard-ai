@@ -1,3 +1,4 @@
+import secrets
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -8,6 +9,11 @@ from payguard.demo_data import make_demo_transactions
 from payguard.investigation_service import InvestigationStore
 from payguard.paypal_client import PayPalClient
 from payguard.risk_engine import assess_transactions
+from payguard.checkout_service import (
+    CheckoutError, PayPalCheckoutStore, SANDBOX_TEST_AMOUNT,
+    assess_sandbox_capture, create_sandbox_order, process_cancellation,
+    verify_and_capture,
+)
 
 st.set_page_config(page_title="PayGuard AI", page_icon="◈", layout="wide", initial_sidebar_state="expanded")
 NAV_SECTIONS = ["Overview", "Transactions", "Investigations", "Analytics", "Settings"]
@@ -26,6 +32,14 @@ def _restore_flagged_columns():
     st.session_state.flagged_table_revision += 1
 
 st.markdown("""<style>
+/* Preserve the existing dark UI while retaining the upstream section switcher and table controls. */
+:root{--ink:#e9eff8;--muted:#94a3b8;--panel:#121d2b;--line:#253447;--blue:#5b9cff;--teal:#51d6bd;--background-color:#0b1320;--secondary-background-color:#121d2b;--text-color:#e9eff8;--primary-color:#5b9cff}
+html,body,[class*="css"]{font-family:'DM Sans',sans-serif}.stApp{background:#0b1320;color:var(--ink)}
+.block-container{max-width:1420px;padding-top:1.5rem}.hero{padding:24px 0 12px}.hero h1{color:#f4f7fb}.hero p{color:#9baec4}
+.section{color:#edf3fb}.tag{background:#17283b;color:#a9cfff}
+.st-key-flagged-table-shell{border-color:#253447;background:#121d2b}
+.stTabs [data-baseweb="tab-list"]{gap:8px;border-bottom:1px solid #253447}.stTabs [data-baseweb="tab"]{background:#121d2b;border:1px solid #253447;border-bottom:0;border-radius:8px 8px 0 0;padding:9px 14px;color:#aab9ca}.stTabs [data-baseweb="tab"][aria-selected="true"]{background:#1a2a3d;color:#f4f7fb}.stTabs [data-baseweb="tab-highlight"]{background:#5b9cff}
+div[data-testid="stPlotlyChart"]{margin:.25rem 0 1rem}div[data-testid="stExpander"]{border:1px solid #253447;border-radius:10px}
 @import url(https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap);
 html,body,[class*="css"]{font-family:DM Sans,sans-serif}
 [data-testid="stAppViewContainer"],.stApp{background:radial-gradient(ellipse at 10% 0%,color-mix(in srgb,var(--pg-accent, #38aaff) 7%,var(--background-color)),transparent 36rem),var(--background-color)}
@@ -176,10 +190,15 @@ if active_section == "Overview":
             chart_data = transactions.copy(); chart_data["timestamp"] = pd.to_datetime(chart_data.timestamp, utc=True, errors="coerce")
             chart_data["amount"] = pd.to_numeric(chart_data.amount, errors="coerce")
             chart_data = chart_data.dropna(subset=["timestamp", "amount"]).set_index("timestamp").groupby("currency").resample("D").amount.sum().reset_index()
-            st.plotly_chart(px.area(chart_data, x="timestamp", y="amount", color="currency", color_discrete_sequence=["#5b9cff", "#51d6bd", "#e8b768", "#ff7585"], labels={"timestamp":"Date", "amount":"Volume (native currency)"}).update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=0,r=0,t=8,b=0),height=290), width="stretch")
+            activity_fig = px.area(chart_data, x="timestamp", y="amount", color="currency", template="plotly_dark", color_discrete_sequence=["#5b9cff", "#51d6bd", "#e8b768", "#ff7585"], labels={"timestamp":"Date", "amount":"Volume (native currency)"})
+            activity_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=54,r=16,t=42,b=42), height=330, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+            st.plotly_chart(activity_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
         with right:
             st.markdown('<div class="section">Payment status</div>', unsafe_allow_html=True)
-            st.plotly_chart(px.pie(transactions, names="status", hole=.68, color_discrete_sequence=["#51d6bd", "#ff7585", "#e8b768", "#6e8cae"]).update_layout(paper_bgcolor="rgba(0,0,0,0)",margin=dict(l=0,r=0,t=8,b=0),height=290,showlegend=True), width="stretch")
+            status_fig = px.pie(transactions, names="status", hole=.68, template="plotly_dark", color_discrete_sequence=["#51d6bd", "#ff7585", "#e8b768", "#6e8cae"])
+            status_fig.update_traces(textposition="inside", textinfo="percent", textfont_size=11, automargin=True)
+            status_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=12,r=12,t=18,b=64), height=330, showlegend=True, uniformtext_minsize=10, uniformtext_mode="hide", legend=dict(orientation="h", yanchor="top", y=-.12, xanchor="center", x=.5, font=dict(size=10)))
+            st.plotly_chart(status_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
 
     st.markdown('<div class="section section-center">Recent flagged activity</div>', unsafe_allow_html=True)
     if risk.empty:
@@ -219,6 +238,7 @@ if active_section == "Overview":
             y="count",
             color="severity",
             text="count",
+            template="plotly_dark",
             category_orders={"severity": priority_order},
             color_discrete_map={"High": "#ff7585", "Medium": "#e8b768", "Low": "#51d6bd"},
         ).update_traces(textposition="outside", cliponaxis=False).update_layout(
@@ -304,10 +324,18 @@ if active_section == "Analytics":
         period = st.selectbox("Period", ["All available data", "Last 7 days", "Last 30 days"])
         if period != "All available data": analytic = analytic[analytic.timestamp >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=7 if period == "Last 7 days" else 30)]
         c1, c2 = st.columns(2)
-        with c1: st.plotly_chart(px.histogram(analytic, x="amount", color="currency", facet_col="currency", nbins=24, title="Transaction amount distribution by currency").update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)"), width="stretch")
+        with c1:
+            amount_fig = px.histogram(analytic, x="amount", color="currency", facet_col="currency", nbins=24, template="plotly_dark", title="Transaction amount distribution by currency")
+            amount_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=52,r=18,t=76,b=58), height=400)
+            amount_fig.update_xaxes(tickangle=-25)
+            st.plotly_chart(amount_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
         with c2:
             rule_rows = [{"rule": rule, "findings": int(risk.rules.map(lambda rules: rule in rules).sum())} for rule in sorted({r for rules in risk.rules for r in rules})] if not risk.empty else []
-            if rule_rows: st.plotly_chart(px.bar(pd.DataFrame(rule_rows), x="rule", y="findings", title="Findings by rule", color_discrete_sequence=["#51d6bd"]).update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)"), width="stretch")
+            if rule_rows:
+                rules_fig = px.bar(pd.DataFrame(rule_rows), x="rule", y="findings", template="plotly_dark", title="Findings by rule", color_discrete_sequence=["#51d6bd"])
+                rules_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=42,r=18,t=76,b=92), height=400)
+                rules_fig.update_xaxes(tickangle=-25, automargin=True)
+                st.plotly_chart(rules_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
             else: st.info("No rule findings in this dataset.")
         status = analytic.status.astype(str).str.upper()
         st.metric("Payment success rate", f"{(status.isin(['COMPLETED','SUCCESS','S']).mean()*100):.1f}%" if len(analytic) else "Unavailable")
@@ -340,6 +368,86 @@ if active_section == "Settings":
         st.info("Select PayPal Sandbox and set server-side credentials before testing the reporting API.")
     st.write(f"**Gemini API key:** {'Configured; a request is made only when you click the explanation button' if settings.GEMINI_API_KEY else 'Not configured; deterministic fallback is active'} — key remains server-side.")
     st.write("**Storage:** Local SQLite file; suitable for a demo, not shared multi-user production storage.")
-    st.markdown("Set environment variables before starting Streamlit or in Render settings. Streamlit does not load `.env` automatically. Never paste credentials into this page.")
-    st.code("PAYGUARD_DATA_SOURCE=demo  # or paypal\nPAYPAL_CLIENT_ID=...\nPAYPAL_CLIENT_SECRET=...\nPAYPAL_BASE_URL=https://api-m.sandbox.paypal.com\nGEMINI_API_KEY=...\nGEMINI_MODEL=gemini-3.8-flash", language="bash")
+    st.markdown("Set environment variables before starting Streamlit or in Render settings. The project loads its own `.env` file at startup. Never paste credentials into this page.")
+    with st.expander("Environment configuration example", expanded=False):
+        st.code("PAYGUARD_DATA_SOURCE=demo\nPAYPAL_CLIENT_ID=...\nPAYPAL_CLIENT_SECRET=...\nPAYPAL_BASE_URL=https://api-m.sandbox.paypal.com\nPAYPAL_RETURN_URL=http://localhost:8501/\nPAYPAL_CANCEL_URL=http://localhost:8501/\nGEMINI_API_KEY=...\nGEMINI_MODEL=gemini-3.8-flash", language="bash")
 
+    st.markdown('<div class="section">PayPal Sandbox checkout test</div>', unsafe_allow_html=True)
+    st.caption("Creates a fixed USD test order through the Sandbox API. Use a Sandbox Personal buyer. Approval alone does not mark the payment complete; PayGuard verifies and captures server-side after you request verification.")
+    if not settings.paypal_configured:
+        st.info("Configure Sandbox REST credentials in the server environment to use checkout. Demo mode remains available without them.")
+    else:
+        checkout_store = PayPalCheckoutStore(settings.db_path)
+        checkout_client = PayPalClient(settings.paypal_client_id, settings.paypal_client_secret, settings.paypal_base_url)
+        st.info(f"Fixed test amount: USD {SANDBOX_TEST_AMOUNT} · Source: PayPal Sandbox · Stored locally in SQLite")
+        if "pg_checkout_state" not in st.session_state:
+            st.session_state.pg_checkout_state = None
+        query = st.query_params
+        callback_event = query.get("pg_checkout")
+        callback_state = query.get("pg_state")
+        callback_order = query.get("token")
+        if callback_event in {"return", "cancel"} and callback_state and callback_order:
+            try:
+                if callback_event == "cancel":
+                    cancelled = process_cancellation(checkout_client, checkout_store, callback_order, callback_state)
+                    st.session_state.pg_checkout_state = callback_state
+                    if cancelled["status"] == "PAID":
+                        st.success("PayPal confirms this Sandbox order was already completed. The verified capture is recorded below.")
+                    else:
+                        st.info("PayPal returned you from the approval flow. This order has not been captured.")
+                else:
+                    returned_attempt = checkout_store.get_attempt(callback_state)
+                    if not returned_attempt or returned_attempt.get("order_id") != callback_order:
+                        raise CheckoutError("PayPal return did not match the order stored for this checkout")
+                    st.session_state.pg_checkout_state = callback_state
+                    st.info("Return received. PayGuard will verify this order with PayPal before offering server-side capture.")
+            except Exception as exc:
+                st.error(f"Could not validate the PayPal return ({type(exc).__name__}). Start a new Sandbox checkout if needed.")
+            finally:
+                # Remove callback parameters so refreshes do not repeat callback handling.
+                st.query_params.clear()
+        if st.button("Create USD 1.00 Sandbox checkout", type="primary", key="pg-create-checkout"):
+            state = secrets.token_urlsafe(32)
+            try:
+                checkout_store.create_attempt(state)
+                create_sandbox_order(checkout_client, checkout_store, state, settings.paypal_return_url, settings.paypal_cancel_url)
+                st.session_state.pg_checkout_state = state
+                st.success("Sandbox order created. Open the approval link and complete the buyer step using your Sandbox Personal account.")
+            except Exception as exc:
+                st.error(f"Sandbox order creation failed ({type(exc).__name__}). No synthetic data was substituted.")
+        checkout_state = st.session_state.get("pg_checkout_state")
+        attempt = checkout_store.get_attempt(checkout_state) if checkout_state else None
+        if attempt:
+            st.caption(f"Checkout state: {attempt['status']} · Order ID: {attempt['order_id'] or 'not created'}")
+            if attempt.get("approval_url") and attempt["status"] == "AWAITING_APPROVAL":
+                st.link_button("Open PayPal Sandbox approval", attempt["approval_url"])
+                st.caption("Sign in with your Sandbox Personal buyer, approve the USD 1.00 payment, then return to this app.")
+                if st.button("Verify with PayPal and capture", key="pg-verify-capture"):
+                    try:
+                        attempt = verify_and_capture(checkout_client, checkout_store, attempt["order_id"], checkout_state)
+                        if attempt["status"] == "PAID":
+                            st.success("PayPal confirmed a completed Sandbox capture.")
+                        else:
+                            st.warning("PayPal has not confirmed buyer approval yet. Complete approval, then verify again.")
+                    except Exception as exc:
+                        st.error(f"Verification/capture did not complete ({type(exc).__name__}). The app has not marked this payment paid.")
+            if attempt["status"] == "PAID" and attempt.get("transaction"):
+                txn = attempt["transaction"]
+                st.markdown('<div class="section">Payment summary</div>', unsafe_allow_html=True)
+                summary_cols = st.columns(3)
+                summary_cols[0].metric("Amount paid", f"{txn['currency']} {txn['amount']:.2f}")
+                summary_cols[1].metric("Payment status", txn["status"].replace("_", " ").title())
+                summary_cols[2].metric("Capture ID", txn["transaction_id"])
+                st.caption(f"Source: {txn['source']} · Timestamp: {txn['timestamp'] or 'Not supplied'}")
+                st.caption("This verified Sandbox capture is assessed on its own and is not added to synthetic demo metrics or transactions.")
+                sandbox_risk = assess_sandbox_capture(txn)
+                st.markdown('<div class="section">Risk assessment</div>', unsafe_allow_html=True)
+                if sandbox_risk.empty:
+                    st.info("No risk rule was triggered by this single capture. A single payment is not evidence of fraud.")
+                else:
+                    finding = sandbox_risk.iloc[0]
+                    st.markdown(f"**{finding.severity} priority** &nbsp; <span class=\"tag\">{finding.score}/100</span>", unsafe_allow_html=True)
+                    st.markdown("**Evidence**")
+                    st.write(finding.evidence)
+                    st.markdown("**Assessment**")
+                    st.write(finding.explanation)
