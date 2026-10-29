@@ -281,10 +281,10 @@ if active_section == "Investigations":
                 result = st.session_state.ai_explanations.get(explanation_key)
                 if result is None:
                     result = explain_finding(finding.to_dict())
-                if settings.openai_api_key and st.button("Ask AI to explain this finding", key=f"ai-{explanation_key}"):
-                    result = explain_finding(finding.to_dict(), settings.openai_api_key, settings.openai_model, base_url=settings.openai_base_url)
+                if settings.GEMINI_API_KEY and st.button("Ask AI to explain this finding", key=f"ai-{explanation_key}"):
+                    result = explain_finding(finding.to_dict(), settings.GEMINI_API_KEY, settings.GEMINI_MODEL)
                     st.session_state.ai_explanations[explanation_key] = result
-                elif not settings.openai_api_key:
+                elif not settings.GEMINI_API_KEY:
                     st.caption("AI provider not configured. Showing the deterministic rules-based explanation.")
                 st.caption(f"Explanation source: {result['provider']}")
                 st.write(result["why_flagged"])
@@ -338,8 +338,8 @@ if active_section == "Settings":
             st.error(f"Connection test failed ({probe.get('error', 'unknown error')}). No transaction rows were invented.")
     elif settings.data_source == "paypal":
         st.info("Select PayPal Sandbox and set server-side credentials before testing the reporting API.")
-    st.write(f"**AI provider key:** {'Configured; a request is made only when you click the explanation button' if settings.openai_api_key else 'Not configured; deterministic fallback is active'} — key remains server-side.")
+    st.write(f"**Gemini API key:** {'Configured; a request is made only when you click the explanation button' if settings.GEMINI_API_KEY else 'Not configured; deterministic fallback is active'} — key remains server-side.")
     st.write("**Storage:** Local SQLite file; suitable for a demo, not shared multi-user production storage.")
     st.markdown("Set environment variables before starting Streamlit or in Render settings. Streamlit does not load `.env` automatically. Never paste credentials into this page.")
-    st.code("PAYGUARD_DATA_SOURCE=demo  # or paypal\nPAYPAL_CLIENT_ID=...\nPAYPAL_CLIENT_SECRET=...\nPAYPAL_BASE_URL=https://api-m.sandbox.paypal.com\nOPENAI_API_KEY=...\nOPENAI_MODEL=gpt-4o-mini\nOPENAI_BASE_URL=https://api.openai.com/v1", language="bash")
+    st.code("PAYGUARD_DATA_SOURCE=demo  # or paypal\nPAYPAL_CLIENT_ID=...\nPAYPAL_CLIENT_SECRET=...\nPAYPAL_BASE_URL=https://api-m.sandbox.paypal.com\nGEMINI_API_KEY=...\nGEMINI_MODEL=gemini-3.8-flash", language="bash")
 
