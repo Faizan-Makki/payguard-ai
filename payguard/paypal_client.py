@@ -1,9 +1,11 @@
 """Read-only PayPal Transaction Search client. Never logs credentials or payloads."""
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 import json
 import math
+import re
 import requests
 from urllib.parse import urlsplit
 
@@ -13,6 +15,8 @@ TRANSACTION_SEARCH_SCOPE = "https://uri.paypal.com/services/reporting/search/rea
 MAX_RANGE = timedelta(days=31)
 # Keep demo processing bounded: current transparent rules compare local reference windows.
 MAX_PAGES = 20
+ORDERS_PATH = "/v2/checkout/orders"
+ORDER_ID_PATTERN = re.compile(r"^[A-Z0-9]{1,36}$")
 
 
 class PayPalAPIError(RuntimeError):
@@ -92,6 +96,107 @@ class PayPalClient:
             if isinstance(exc, PayPalAPIError):
                 raise
             raise PayPalAPIError("PayPal returned an invalid OAuth response") from exc
+
+    @staticmethod
+    def _valid_request_id(request_id: str) -> str:
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 108 or not re.fullmatch(r"[A-Za-z0-9._:-]+", request_id):
+            raise ValueError("PayPal-Request-Id must be 1–108 safe ASCII characters")
+        return request_id
+
+    @staticmethod
+    def _validate_redirect_url(value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("PayPal checkout redirect URLs must be HTTP(S) URLs")
+        parsed = urlsplit(value)
+        local_http = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}
+        if not (parsed.scheme == "https" or local_http) or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+            raise ValueError("PayPal checkout redirect URLs must be HTTPS (or localhost HTTP) without credentials or fragments")
+        return value
+
+    def _orders_request(self, method: str, path: str, token: str, *, body: dict | None = None, request_id: str | None = None) -> dict:
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json", "Prefer": "return=representation"}
+        if request_id is not None:
+            headers["PayPal-Request-Id"] = self._valid_request_id(request_id)
+        try:
+            if method == "POST":
+                response = requests.post(f"{self.base_url}{path}", json=body or {}, headers=headers, timeout=self.timeout, allow_redirects=False)
+            else:
+                response = requests.get(f"{self.base_url}{path}", headers=headers, timeout=self.timeout, allow_redirects=False)
+            response.raise_for_status()
+            result = response.json()
+        except requests.Timeout as exc:
+            raise PayPalAPIError(f"PayPal Orders API {method} request timed out") from exc
+        except requests.RequestException as exc:
+            code = getattr(getattr(exc, "response", None), "status_code", None)
+            suffix = f" (HTTP {code})" if code else ""
+            raise PayPalAPIError(f"PayPal Orders API {method} request failed{suffix}") from exc
+        except ValueError as exc:
+            raise PayPalAPIError("PayPal Orders API returned invalid JSON") from exc
+        if not isinstance(result, dict):
+            raise PayPalAPIError("PayPal Orders API returned an invalid response")
+        return result
+
+    def create_order(self, amount: str, currency: str, return_url: str, cancel_url: str, request_id: str) -> dict:
+        """Create a CAPTURE-intent Sandbox order and return only its ID/status/approval link."""
+        try:
+            value = Decimal(str(amount))
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("PayPal checkout amount must be a valid positive USD amount") from exc
+        if not value.is_finite() or value <= 0 or value > Decimal("10.00"):
+            raise ValueError("PayPal Sandbox test amount must be greater than zero and at most USD 10.00")
+        if currency != "USD":
+            raise ValueError("PayGuard Sandbox checkout currently supports USD only")
+        value = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if value <= 0 or value > Decimal("10.00"):
+            raise ValueError("PayPal Sandbox test amount must be greater than zero and at most USD 10.00")
+        return_url = self._validate_redirect_url(return_url)
+        cancel_url = self._validate_redirect_url(cancel_url)
+        request_id = self._valid_request_id(request_id)
+        body = {
+            "intent": "CAPTURE",
+            "purchase_units": [{"amount": {"currency_code": currency, "value": f"{value:.2f}"}}],
+            "payment_source": {
+                "paypal": {
+                    "experience_context": {
+                        "return_url": return_url,
+                        "cancel_url": cancel_url,
+                        "user_action": "PAY_NOW",
+                    }
+                }
+            },
+        }
+        result = self._orders_request("POST", ORDERS_PATH, self._token(), body=body, request_id=request_id)
+        order_id = result.get("id")
+        status = result.get("status")
+        links = result.get("links")
+        if not isinstance(order_id, str) or not ORDER_ID_PATTERN.fullmatch(order_id) or not isinstance(status, str) or not isinstance(links, list):
+            raise PayPalAPIError("PayPal Orders API returned incomplete order details")
+        approval_url = None
+        for link in links:
+            if not isinstance(link, dict) or link.get("rel") not in {"approve", "payer-action"} or not isinstance(link.get("href"), str):
+                continue
+            parsed = urlsplit(link["href"])
+            if parsed.scheme == "https" and parsed.hostname == "www.sandbox.paypal.com" and not parsed.username and not parsed.password:
+                approval_url = link["href"]
+                break
+        if approval_url is None:
+            raise PayPalAPIError("PayPal Orders API response did not contain a Sandbox approval link")
+        return {"id": order_id, "status": status, "approval_url": approval_url}
+
+    def get_order(self, order_id: str) -> dict:
+        """Fetch a Sandbox order representation for server-side approval verification."""
+        if not isinstance(order_id, str) or not ORDER_ID_PATTERN.fullmatch(order_id):
+            raise ValueError("Invalid PayPal order ID")
+        result = self._orders_request("GET", f"{ORDERS_PATH}/{order_id}", self._token())
+        if result.get("id") != order_id or not isinstance(result.get("status"), str):
+            raise PayPalAPIError("PayPal Orders API returned mismatched order details")
+        return result
+
+    def capture_order(self, order_id: str, request_id: str) -> dict:
+        """Capture an already-approved Sandbox order with a stable idempotency key."""
+        if not isinstance(order_id, str) or not ORDER_ID_PATTERN.fullmatch(order_id):
+            raise ValueError("Invalid PayPal order ID")
+        return self._orders_request("POST", f"{ORDERS_PATH}/{order_id}/capture", self._token(), body={}, request_id=request_id)
 
     def _search_page(self, token: str, start: str, end: str, page: int, page_size: int) -> dict:
         params = {

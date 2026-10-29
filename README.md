@@ -9,8 +9,9 @@ This is a decision-support prototype, not production-grade fraud prevention. A r
 - Responsive Streamlit dashboard with data-derived payment KPIs, activity, status and risk views.
 - Searchable transaction explorer with payment status and risk priority shown separately.
 - Explainable repeated-attempt, unusual-amount and failed-payment-cluster rules.
-- Optional OpenAI Chat Completions service with strict JSON Schema output and deterministic fallback.
+- Optional Gemini `generateContent` service with structured JSON output and deterministic fallback.
 - Local SQLite review status and notes.
+- Separate fixed-amount PayPal Sandbox checkout with server-side verification, capture and isolated risk assessment.
 - Read-only PayPal Sandbox Transaction Search client; no silently substituted demo records.
 
 ## Stack and layout
@@ -45,14 +46,20 @@ Keep secrets out of source control, screenshots, and logs. On Render, define the
 | `PAYGUARD_DATA_SOURCE` | `demo` (default) or `paypal` |
 | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | Sandbox REST app credentials |
 | `PAYPAL_BASE_URL` | Defaults to PayPal Sandbox API URL above |
-| `OPENAI_API_KEY` | Optional provider key for AI explanations |
-| `OPENAI_MODEL` | Optional model name, default `gpt-4o-mini` |
-| `OPENAI_BASE_URL` | API base URL, default `https://api.openai.com/v1` |
+| `PAYPAL_RETURN_URL`, `PAYPAL_CANCEL_URL` | Local defaults use `http://localhost:8501/`; hosted callback URLs must use HTTPS |
+| `GEMINI_API_KEY` | Optional provider key for AI explanations |
+| `GEMINI_MODEL` | Optional Gemini model name, default `gemini-3.8-flash` |
 | `PAYGUARD_DB_PATH` | Local SQLite path, default `payguard.db` |
+
+## PayPal Sandbox checkout test
+
+Keep `PAYGUARD_DATA_SOURCE=demo`; checkout is independent of dashboard data mode. Configure `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` in the server environment, and set `PAYPAL_RETURN_URL` and `PAYPAL_CANCEL_URL` to `http://localhost:8501/` locally. In Settings, create a fixed USD 1.00 order, open the approval link, sign in with your Sandbox Personal buyer, approve, return to Streamlit, and click **Verify with PayPal and capture**. The return URL does not prove payment: PayGuard fetches the order from PayPal and captures only when PayPal reports `APPROVED`. It records the transaction as paid only after a completed order with exactly one completed capture matching USD 1.00. Cancellation checks status but never captures. A stable `PayPal-Request-Id` is reused on retries. Payer identity is discarded. Captures are labeled PayPal Sandbox and assessed separately; they do not enter synthetic dashboard metrics.
+
+Orders API calls use the fixed official Sandbox host. Automated tests mock HTTP and never charge even a Sandbox account. The actual Sandbox buyer checkout still requires a manual run using valid Sandbox credentials. Local SQLite stores short-lived checkout state for 30 minutes. Ephemeral Render storage can lose pending state, and multiple app instances are not supported for this callback workflow.
 
 ## PayPal Sandbox
 
-Create a Sandbox REST app in the PayPal Developer Dashboard and place its client ID and secret in environment variables. Set `PAYGUARD_DATA_SOURCE=paypal`. The app uses OAuth 2.0 client credentials and the read-only Transaction Search endpoint for the recent seven-day period. Settings offers a separate reporting API connection probe; a successful probe means OAuth and an API call succeeded, even if zero transactions matched. The dashboard separately reports transaction retrieval and row count. It does not initiate or capture payments. A failed request produces an explicit error and no synthetic fallback.
+Create a Sandbox REST app in the PayPal Developer Dashboard and place its client ID and secret in environment variables. Set `PAYGUARD_DATA_SOURCE=paypal` only if you want to use read-only Transaction Search as the dashboard source. The app uses OAuth 2.0 client credentials and searches the recent seven-day period. Settings offers a separate reporting API connection probe; a successful probe means OAuth and an API call succeeded, even if zero transactions matched. The dashboard separately reports transaction retrieval and row count. The independent Settings checkout uses Orders API v2 as described above. Failed requests produce an explicit error and no synthetic fallback.
 
 PayPal documents history over the previous three years, a maximum requested period of 31 days, and up to a three-hour delay before executed transactions appear. The app reads all pages reported by the API (with a defensive 20-page limit, 2,000 rows at the default page size; exceeding it errors rather than silently truncating), requests only `transaction_info`, and asks for all record types. The default seven-day query still depends on transactions existing in the configured Sandbox account.
 
@@ -60,7 +67,7 @@ Official references: [PayPal REST requests and OAuth](https://developer.paypal.c
 
 ## AI explanations
 
-Without `OPENAI_API_KEY`, the app provides a clearly labelled deterministic explanation. With a key, the merchant clicks **Ask AI to explain this finding**; only that structured finding is sent to the configured OpenAI Chat Completions endpoint. The response is validated; engine evidence and recommendations remain authoritative. PayPal credentials are never sent. Provider failure falls back to deterministic output. No live AI call has been verified in this workspace.
+Without `GEMINI_API_KEY`, the app provides a clearly labelled deterministic explanation. With a key, the merchant clicks **Ask AI to explain this finding**; only that structured finding is sent to Google's Gemini `generateContent` endpoint. Gemini returns schema-constrained JSON; engine evidence and investigation steps remain authoritative. PayPal credentials are never sent. Provider failure falls back to deterministic output. The configured key's model metadata is accessible, but a synthetic generation smoke request timed out in this environment; a successful AI-generated explanation remains unverified.
 
 ## Render deployment
 
@@ -72,9 +79,20 @@ Without `OPENAI_API_KEY`, the app provides a clearly labelled deterministic expl
 
 Render's ephemeral filesystem can lose SQLite investigations on restart or redeploy. Use a persistent disk or external storage before relying on history; neither is configured here.
 
+## Tests
+
+Run from the project root:
+
+```bash
+python -m pytest -q
+python -m compileall -q app.py payguard tests
+```
+
+Orders API and checkout tests mock PayPal responses. They verify request shape, cancellation, invalid IDs, capture failures, retry idempotency and duplicate handling. They do not verify live Sandbox credentials or make a real payment.
+
 ## Limitations
 
-- PayPal client behavior has mock coverage, but credentials and an actual Sandbox API response have not been exercised in this workspace. Availability depends on the Sandbox account's transaction history and reporting access. This is delayed historical reporting, not a streaming fraud feed.
+- PayPal API unit tests are mocked. Actual Orders checkout/capture depends on Sandbox credentials and has not been verified by the automated suite. Transaction Search availability depends on the Sandbox account's transaction history and reporting access. This is delayed historical reporting, not a streaming fraud feed.
 - Refund semantics are not treated as a risk rule. Missing refund data is displayed as unavailable.
 - The failure rule is a simple rolling count and does not claim calibrated rate anomaly detection.
 - Demo customer/order identifiers are synthetic; no real personal information is used.
