@@ -23,8 +23,8 @@ st.markdown("""<style>
 :root{--ink:#e9eff8;--muted:#94a3b8;--panel:#121d2b;--line:#253447;--blue:#5b9cff;--teal:#51d6bd}
 html,body,[class*="css"]{font-family:'DM Sans',sans-serif} .stApp{background:#0b1320;color:var(--ink)}
 .block-container{max-width:1420px;padding-top:1.5rem}.hero{padding:24px 0 12px}.eyebrow{color:#6fa9ff;text-transform:uppercase;letter-spacing:.15em;font-size:11px;font-weight:700}.hero h1{font-family:Manrope,sans-serif;font-size:34px;margin:3px 0;color:#f4f7fb}.hero p{color:#9baec4}
-.kpi-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:16px 0 38px}.metric-card{box-sizing:border-box;min-width:0;min-height:148px;padding:18px 20px;background:#121d2b;border:1px solid #253447;border-radius:12px;display:flex;flex-direction:column;justify-content:space-between}.metric-label{min-height:2.7em;color:#93a5bb;font-size:12px;line-height:1.35;letter-spacing:.045em;overflow-wrap:anywhere}.metric-value{max-width:100%;font-family:Manrope,sans-serif;color:#f4f7fb;font-size:clamp(1.2rem,1.8vw,1.8rem);line-height:1.18;font-weight:700;letter-spacing:-.035em;margin:2px 0 7px;white-space:nowrap;font-variant-numeric:tabular-nums}.metric-note{min-height:1.3em;max-width:100%;color:#51d6bd;font-size:11px;line-height:1.4;margin-top:auto;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.section{font-family:Manrope,sans-serif;font-weight:700;color:#edf3fb;font-size:18px;margin:18px 0 8px}.tag{border-radius:20px;padding:4px 10px;background:#17283b;color:#a9cfff;font-size:12px}.stTabs [data-baseweb="tab-list"]{gap:8px}.stTabs [data-baseweb="tab"]{background:#121d2b;border-radius:8px 8px 0 0}
-div[data-testid="stDataFrame"]{border:1px solid #253447;border-radius:10px}div[data-testid="stPlotlyChart"]{min-width:0;max-width:100%}.stButton button[kind="primary"]{background:#316ee8;border:0}
+.kpi-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:16px 0 38px}.metric-card{box-sizing:border-box;min-width:0;min-height:148px;padding:18px 20px;background:#121d2b;border:1px solid #253447;border-radius:12px;display:flex;flex-direction:column;justify-content:space-between}.metric-label{min-height:2.7em;color:#93a5bb;font-size:12px;line-height:1.35;letter-spacing:.045em;overflow-wrap:anywhere}.metric-value{max-width:100%;font-family:Manrope,sans-serif;color:#f4f7fb;font-size:clamp(1.2rem,1.8vw,1.8rem);line-height:1.18;font-weight:700;letter-spacing:-.035em;margin:2px 0 7px;white-space:nowrap;font-variant-numeric:tabular-nums}.metric-note{min-height:1.3em;max-width:100%;color:#51d6bd;font-size:11px;line-height:1.4;margin-top:auto;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.section{font-family:Manrope,sans-serif;font-weight:700;color:#edf3fb;font-size:18px;margin:18px 0 8px}.tag{border-radius:20px;padding:4px 10px;background:#17283b;color:#a9cfff;font-size:12px}.stTabs [data-baseweb="tab-list"]{gap:8px;border-bottom:1px solid #253447}.stTabs [data-baseweb="tab"]{background:#121d2b;border:1px solid #253447;border-bottom:0;border-radius:8px 8px 0 0;padding:9px 14px;color:#aab9ca}.stTabs [data-baseweb="tab"][aria-selected="true"]{background:#1a2a3d;color:#f4f7fb}.stTabs [data-baseweb="tab-highlight"]{background:#5b9cff}
+div[data-testid="stDataFrame"]{border:1px solid #253447;border-radius:10px}div[data-testid="stPlotlyChart"]{min-width:0;max-width:100%;margin:.25rem 0 1rem}div[data-testid="stExpander"]{border:1px solid #253447;border-radius:10px}.stButton button[kind="primary"]{background:#316ee8;border:0}
 @media(max-width:1000px){.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.metric-value{font-size:clamp(1.2rem,3vw,1.7rem)}}
 @media(max-width:620px){.kpi-grid{grid-template-columns:minmax(0,1fr);gap:10px;margin-bottom:30px}.metric-card{min-height:132px;padding:16px 18px}.metric-value{font-size:1.65rem}.hero h1{font-size:29px}}
 </style>""", unsafe_allow_html=True)
@@ -117,13 +117,13 @@ else:
         chart_data["amount"] = pd.to_numeric(chart_data.amount, errors="coerce")
         chart_data = chart_data.dropna(subset=["timestamp", "amount"]).set_index("timestamp").groupby("currency").resample("D").amount.sum().reset_index()
         activity_fig = px.area(chart_data, x="timestamp", y="amount", color="currency", template="plotly_dark", color_discrete_sequence=["#5b9cff", "#51d6bd", "#e8b768", "#ff7585"], labels={"timestamp":"Date", "amount":"Volume (native currency)"})
-        activity_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=62,r=18,t=54,b=46), height=340, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+        activity_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=54,r=16,t=42,b=42), height=330, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
         st.plotly_chart(activity_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
     with right:
         st.markdown('<div class="section">Payment status</div>', unsafe_allow_html=True)
         status_fig = px.pie(transactions, names="status", hole=.68, template="plotly_dark", color_discrete_sequence=["#51d6bd", "#ff7585", "#e8b768", "#6e8cae"])
         status_fig.update_traces(textposition="inside", textinfo="percent", textfont_size=11, automargin=True)
-        status_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=12,r=12,t=20,b=76), height=340, showlegend=True, uniformtext_minsize=10, uniformtext_mode="hide", legend=dict(orientation="h", yanchor="top", y=-.14, xanchor="center", x=.5, font=dict(size=10)))
+        status_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", autosize=True, margin=dict(l=12,r=12,t=18,b=64), height=330, showlegend=True, uniformtext_minsize=10, uniformtext_mode="hide", legend=dict(orientation="h", yanchor="top", y=-.12, xanchor="center", x=.5, font=dict(size=10)))
         st.plotly_chart(status_fig, width="stretch", config={"responsive": True, "displayModeBar": False})
 
 tab_overview, tab_transactions, tab_investigate, tab_analytics, tab_settings = st.tabs(["Overview", "Transactions", "Investigations", "Analytics", "Settings"])
@@ -263,7 +263,8 @@ with tab_settings:
     st.write(f"**Gemini API key:** {'Configured; a request is made only when you click the explanation button' if settings.GEMINI_API_KEY else 'Not configured; deterministic fallback is active'} — key remains server-side.")
     st.write("**Storage:** Local SQLite file; suitable for a demo, not shared multi-user production storage.")
     st.markdown("Set environment variables before starting Streamlit or in Render settings. The project loads its own `.env` file at startup. Never paste credentials into this page.")
-    st.code("PAYGUARD_DATA_SOURCE=demo\nPAYPAL_CLIENT_ID=...\nPAYPAL_CLIENT_SECRET=...\nPAYPAL_BASE_URL=https://api-m.sandbox.paypal.com\nPAYPAL_RETURN_URL=http://localhost:8501/\nPAYPAL_CANCEL_URL=http://localhost:8501/\nGEMINI_API_KEY=...\nGEMINI_MODEL=gemini-3.8-flash", language="bash")
+    with st.expander("Environment configuration example", expanded=False):
+        st.code("PAYGUARD_DATA_SOURCE=demo\nPAYPAL_CLIENT_ID=...\nPAYPAL_CLIENT_SECRET=...\nPAYPAL_BASE_URL=https://api-m.sandbox.paypal.com\nPAYPAL_RETURN_URL=http://localhost:8501/\nPAYPAL_CANCEL_URL=http://localhost:8501/\nGEMINI_API_KEY=...\nGEMINI_MODEL=gemini-3.8-flash", language="bash")
 
     st.markdown('<div class="section">PayPal Sandbox checkout test</div>', unsafe_allow_html=True)
     st.caption("Creates a fixed USD test order through the Sandbox API. Use a Sandbox Personal buyer. Approval alone does not mark the payment complete; PayGuard verifies and captures server-side after you request verification.")
@@ -326,13 +327,21 @@ with tab_settings:
                         st.error(f"Verification/capture did not complete ({type(exc).__name__}). The app has not marked this payment paid.")
             if attempt["status"] == "PAID" and attempt.get("transaction"):
                 txn = attempt["transaction"]
-                st.write({"Source": txn["source"], "Capture ID": txn["transaction_id"], "Amount": f"{txn['currency']} {txn['amount']:.2f}", "PayPal status": txn["status"], "Timestamp": txn["timestamp"] or "Not supplied"})
+                st.markdown('<div class="section">Payment summary</div>', unsafe_allow_html=True)
+                summary_cols = st.columns(3)
+                summary_cols[0].metric("Amount paid", f"{txn['currency']} {txn['amount']:.2f}")
+                summary_cols[1].metric("Payment status", txn["status"].replace("_", " ").title())
+                summary_cols[2].metric("Capture ID", txn["transaction_id"])
+                st.caption(f"Source: {txn['source']} · Timestamp: {txn['timestamp'] or 'Not supplied'}")
                 st.caption("This verified Sandbox capture is assessed on its own and is not added to synthetic demo metrics or transactions.")
                 sandbox_risk = assess_sandbox_capture(txn)
+                st.markdown('<div class="section">Risk assessment</div>', unsafe_allow_html=True)
                 if sandbox_risk.empty:
                     st.info("No risk rule was triggered by this single capture. A single payment is not evidence of fraud.")
                 else:
                     finding = sandbox_risk.iloc[0]
-                    st.write(f"Investigation priority: {finding.severity} · {finding.score}/100")
-                    st.write("Evidence:", finding.evidence)
+                    st.markdown(f"**{finding.severity} priority** &nbsp; <span class=\"tag\">{finding.score}/100</span>", unsafe_allow_html=True)
+                    st.markdown("**Evidence**")
+                    st.write(finding.evidence)
+                    st.markdown("**Assessment**")
                     st.write(finding.explanation)
